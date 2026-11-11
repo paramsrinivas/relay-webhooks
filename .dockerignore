@@ -1,0 +1,8 @@
+.git
+.gitignore
+.env
+.env.*
+*.log
+.DS_Store
+/relay
+cmd/relay/*.before-*

@@ -1,0 +1,5 @@
+.env
+*.log
+/relay
+.DS_Store
+cmd/relay/*.before-*
