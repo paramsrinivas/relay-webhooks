@@ -40,6 +40,11 @@ jobs:
           PGPASSWORD=relay psql -h localhost -U relay -d postgres \
             -c 'CREATE DATABASE relay_test;'
 
+      - name: Apply database migration
+        run: |
+          PGPASSWORD=relay psql -h localhost -U relay -d relay_test \
+            -v ON_ERROR_STOP=1 -f migrations/001_init.sql
+
       - name: Run tests with race detector
         run: go test -race -count=1 ./...
 
