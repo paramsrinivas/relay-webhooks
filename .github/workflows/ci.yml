@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: relay
+          POSTGRES_PASSWORD: relay
+          POSTGRES_DB: relay
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U relay"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Create test database
+        run: |
+          PGPASSWORD=relay psql -h localhost -U relay -d postgres \
+            -c 'CREATE DATABASE relay_test;'
+
+      - name: Run tests with race detector
+        run: go test -race -count=1 ./...
+
+      - name: Run Go vet
+        run: go vet ./...
+
+      - name: Build Relay
+        run: go build ./cmd/relay
