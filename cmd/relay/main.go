@@ -295,6 +295,43 @@ func (s *server) worker(ctx context.Context, id int, wg *sync.WaitGroup) {
 		deliveryCancel()
 	}
 }
+func newWebhookClient() *http.Client {
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	return newWebhookClientWithNetwork(
+		net.DefaultResolver.LookupIPAddr,
+		dialer.DialContext,
+	)
+}
+
+func newWebhookClientWithNetwork(
+	lookup func(context.Context, string) ([]net.IPAddr, error),
+	dial func(context.Context, string, string) (net.Conn, error),
+) *http.Client {
+	// Reject private/loopback destination IPs at connection time, including DNS rebinding.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		host, port, e := net.SplitHostPort(address)
+		if e != nil {
+			return nil, e
+		}
+		ips, e := lookup(ctx, host)
+		if e != nil {
+			return nil, e
+		}
+		for _, ip := range ips {
+			if !isAllowedWebhookIP(ip.IP) {
+				return nil, errors.New("private destination blocked")
+			}
+		}
+		if len(ips) == 0 {
+			return nil, errors.New("no destination addresses")
+		}
+		return dial(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
+	}
+	return &http.Client{Timeout: 10 * time.Second, Transport: transport, CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse }}
+}
+
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -317,29 +354,7 @@ func main() {
 	if err = db.Ping(ctx); err != nil {
 		log.Fatal(err)
 	}
-	// Reject private/loopback destination IPs at connection time, including DNS rebinding.
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = nil
-	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-		host, port, e := net.SplitHostPort(address)
-		if e != nil {
-			return nil, e
-		}
-		ips, e := net.DefaultResolver.LookupIPAddr(ctx, host)
-		if e != nil {
-			return nil, e
-		}
-		for _, ip := range ips {
-			if !ip.IP.IsGlobalUnicast() || ip.IP.IsPrivate() || ip.IP.IsLoopback() || ip.IP.IsLinkLocalUnicast() {
-				return nil, errors.New("private destination blocked")
-			}
-		}
-		if len(ips) == 0 {
-			return nil, errors.New("no destination addresses")
-		}
-		return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
-	}
-	s := &server{db: db, client: &http.Client{Timeout: 10 * time.Second, Transport: transport, CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse }}}
+	s := &server{db: db, client: newWebhookClient()}
 	n := 4
 	if x, e := strconv.Atoi(os.Getenv("WORKERS")); e == nil && x > 0 && x <= 100 {
 		n = x
